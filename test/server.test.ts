@@ -375,3 +375,44 @@ describe("security hardening", () => {
     expect(JSON.stringify(body)).not.toMatch(/at\s+\(|node_modules|stack/i);
   });
 });
+
+describe("real-socket streaming regression", () => {
+  it("streams a full reply over a live socket without spurious error events", async () => {
+    const { app } = makeApp();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const address = app.server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      const response = await fetch(`http://127.0.0.1:${port}/api/chat/stream`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "ping" }),
+      });
+      expect(response.status).toBe(200);
+
+      const events: string[] = [];
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let separator: number;
+        while ((separator = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, separator);
+          buffer = buffer.slice(separator + 2);
+          const eventLine = frame.split("\n").find((line) => line.startsWith("event: "));
+          events.push(eventLine?.slice("event: ".length) ?? "");
+        }
+      }
+
+      expect(events[0]).toBe("meta");
+      expect(events).toContain("delta");
+      expect(events.at(-1)).toBe("done");
+      expect(events).not.toContain("error");
+    } finally {
+      await app.close();
+    }
+  });
+});

@@ -1,6 +1,6 @@
 # za.ai — Progress & Implementation Plan
 
-## Status: COMPLETE — all milestones implemented, verified, and pushed
+## Status: Milestones 0-6 complete (M6: real-provider validation & production hardening)
 
 Last updated: 2026-09-12
 
@@ -118,24 +118,62 @@ Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (37 passed) ✅ 
 - [x] README: HTTP API reference (endpoints, SSE events, error format), Docker usage
 - [x] Final full verification: lint + format + typecheck + 37 tests + build + docker run
 
+## Milestone 6 — Real Provider Validation & Production Hardening ✅
+
+Baseline: branch `zai-development` in sync with origin; existing suite green
+(37 tests / 8 files); architecture, provider, config, streaming API, and web UI
+inspected before any change.
+
+- [x] Provider configuration: `OPENAI_MODEL` override (wins over `MODEL`),
+      http(s)-only validated + slash-normalized `OPENAI_BASE_URL`, clear
+      `ConfigError` for missing/invalid settings; mock provider unchanged for
+      tests and local dev — real keys never required by the suite
+- [x] Secret redaction (`createSecretRedactor`): verbatim key scrubbing plus
+      Bearer/`sk-…` pattern scrubbing, applied to every client-facing error and
+      server log line; verified end-to-end with a key-echoing upstream
+- [x] Provider diagnostics: `ChatProvider.checkConnectivity()` (cheap
+      /models reachability + auth probe) and `GET /api/diagnostics`
+      (provider, model, base URL, `apiKeyConfigured` boolean, optional
+      `?check=true` live check — never the key itself)
+- [x] Provider smoke test: `npm run smoke:provider` — connectivity + minimal
+      non-streaming + streaming request with delta verification; graceful
+      instructions (exit 0) without a key, redacted diagnostics + exit 1 on
+      failure; verified in mock, keyless, and unreachable modes
+- [x] Provider robustness: proper SSE event framing (blank-line boundaries,
+      `:` comments, multi-`data:`-line events), malformed JSON guarded,
+      content-type checks, timeouts (`AbortSignal.timeout`), client-abort
+      passthrough (499), upstream error bodies truncated + redacted, missing
+      choices/delta tolerated
+- [x] API robustness: client disconnects abort the upstream request mid-stream;
+      atomic turns (failed/aborted turns persist nothing → safe retries);
+      1 MiB body limit (413); config-driven `MAX_MESSAGE_CHARS` (400);
+      structured errors everywhere, no stack traces
+- [x] Conversation limits: `MAX_MESSAGE_CHARS`, `MAX_CONVERSATION_MESSAGES`
+      (oldest dropped), `PROVIDER_TIMEOUT_MS` — all configurable, all tested
+      at boundaries
+- [x] Web UI: Stop generation (AbortController), retry after provider/HTTP
+      errors, streaming cursor, provider·model badge from diagnostics,
+      resilient localStorage wrapper (in-memory fallback), New chat preserved
+- [x] Browser verification: browser backend unavailable in this environment
+      (attempted, `__no_browser_backend__`); substitute = jsdom UI contract
+      tests executing the real app.js (8 tests: render, incremental streaming,
+      stop, retry, new chat, storage failure, HTTP errors) + real-HTTP checks
+- [x] Security review: no secrets tracked (scan), key echoed upstream stays
+      redacted through the API (test), no CORS headers (same-origin), static
+      path traversal probes rejected (test), body/size caps (tests),
+      `npm audit --omit=dev` = 0 vulnerabilities; dev-only vitest mocker
+      advisory (moderate) documented, fix is a breaking vitest 5 upgrade
+- [x] Docs: README (providers, key safety, smoke test, limits, troubleshooting),
+      .env.example (all variables), this file
+
+Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (86 passed) ✅ · build ✅ ·
+HTTP smoke ✅ · Docker run ✅ · smoke:provider (3 modes) ✅
+
 ## Status summary
 
-All five planned milestones are complete, verified, and **pushed to
-`origin/zai-development`**. Every milestone ran the full verification suite
-(lint, format check, typecheck, tests, build) plus milestone-specific checks
-(real-HTTP smoke test, SSE client-contract test, Docker run).
-
-## Blockers / Open questions
-
-1. **Product direction is inferred** (see note above) — confirm or redirect.
-2. **No LLM API key is available in this environment** — real provider inference is
-   implemented but only exercised against the mock provider in tests. Provide
-   `PROVIDER=openai-compat`, `OPENAI_API_KEY=…`, `OPENAI_BASE_URL=…` at runtime to use it.
-3. **Real-browser GUI pass not done** — the automation tooling has no browser backend
-   here. The UI was verified via asset serving, JS syntax check, and a Node replay of
-   the exact client SSE logic. Worth a manual `npm start` + browse when convenient.
-4. `gh` CLI is not authenticated, so GitHub issues/PR metadata are not readable;
-   working purely from the repo.
+Milestones 0–6 are complete, verified, and pushed to `origin/zai-development`.
+Every milestone ran the full verification suite plus milestone-specific checks
+(real-HTTP smoke tests, SSE client-contract tests, Docker run, provider smoke test).
 
 ## Verification checklist (run at every milestone)
 
@@ -146,8 +184,14 @@ npm run lint && npm run typecheck && npm run test && npm run build
 ## Blockers / Open questions
 
 1. **Product direction is inferred** (see note above) — confirm or redirect.
-2. **No LLM API key is available in this environment** — real provider inference is
-   implemented but only exercised against the mock provider in tests. Provide
-   `PROVIDER=openai-compat`, `OPENAI_API_KEY=…`, `OPENAI_BASE_URL=…` at runtime to use it.
-3. `gh` CLI is not authenticated, so GitHub issues/PR metadata are not readable;
+2. **No LLM API key is available in this environment** — the openai-compat
+   transport is fully implemented and unit-tested with a stubbed fetch, but real
+   inference requires `PROVIDER=openai-compat`, `OPENAI_API_KEY=…`,
+   `OPENAI_BASE_URL=…` at runtime; then run `npm run smoke:provider`.
+3. **Real-browser GUI pass not possible** — the automation tooling has no browser
+   backend here; jsdom UI contract tests are the substitute. A manual
+   `npm start` + browse remains worthwhile.
+4. **Dev dependency advisory** — vitest's `@vitest/mocker` has a moderate
+   advisory fixed by the breaking vitest 5 upgrade; not runtime-relevant.
+5. `gh` CLI is not authenticated, so GitHub issues/PR metadata are not readable;
    working purely from the repo.

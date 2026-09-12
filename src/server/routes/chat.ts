@@ -57,8 +57,12 @@ export function registerChatRoutes(
     const conversationId = conversation.id;
 
     // Abort the upstream request when the client disconnects mid-stream.
+    // The response's own 'close' event distinguishes a normal completion
+    // (writableEnded=true) from a premature disconnect; the *request's*
+    // close event fires as soon as its body was consumed, so it cannot be
+    // used here.
     const clientGone = new AbortController();
-    request.raw.on("close", () => {
+    reply.raw.on("close", () => {
       if (!reply.raw.writableEnded) {
         clientGone.abort();
       }
