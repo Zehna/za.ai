@@ -5,6 +5,8 @@ import {
   InMemoryConversationStore,
 } from "../src/core/conversation.js";
 import { MockProvider } from "../src/core/providers/mock.js";
+import { ProviderError } from "../src/core/provider.js";
+import type { ChatRequest } from "../src/core/provider.js";
 
 function makeService(options: { maxHistoryMessages?: number; systemPrompt?: string } = {}) {
   const store = new InMemoryConversationStore();
@@ -107,5 +109,82 @@ describe("ConversationService", () => {
         // consume
       }
     }).rejects.toThrow(ConversationNotFoundError);
+  });
+
+  it("leaves the conversation untouched when a turn fails", async () => {
+    const store = new InMemoryConversationStore();
+    const failing = {
+      name: "failing",
+      model: "boom",
+      complete: async () => {
+        throw new ProviderError("upstream down", 503);
+      },
+      // eslint-disable-next-line require-yield
+      async *stream(): AsyncIterable<string> {
+        throw new ProviderError("upstream down", 503);
+      },
+      async checkConnectivity() {
+        return { state: "unreachable" as const };
+      },
+    };
+    const service = new ConversationService(store, failing);
+    const conversation = service.create();
+
+    await expect(service.turn(conversation.id, "hi")).rejects.toThrow(/upstream down/);
+    expect(store.get(conversation.id)?.messages).toEqual([]);
+
+    await expect(async () => {
+      for await (const _ of service.streamTurn(conversation.id, "hi")) {
+        // consume
+      }
+    }).rejects.toThrow(/upstream down/);
+    expect(store.get(conversation.id)?.messages).toEqual([]);
+  });
+
+  it("persists nothing when a streaming turn is aborted midway", async () => {
+    const store = new InMemoryConversationStore();
+    const endless = {
+      name: "endless",
+      model: "endless-1",
+      complete: async () => {
+        throw new Error("not used");
+      },
+      async *stream(request: ChatRequest) {
+        for (let i = 0; i < 1000; i++) {
+          request.signal?.throwIfAborted();
+          yield `chunk ${i} `;
+        }
+      },
+      async checkConnectivity() {
+        return { state: "ok" as const };
+      },
+    };
+    const service = new ConversationService(store, endless);
+    const conversation = service.create();
+
+    const controller = new AbortController();
+    const deltas: string[] = [];
+    await expect(async () => {
+      for await (const delta of service.streamTurn(conversation.id, "hi", controller.signal)) {
+        deltas.push(delta);
+        if (deltas.length === 3) controller.abort();
+      }
+    }).rejects.toThrow();
+    expect(deltas.length).toBe(3);
+    expect(store.get(conversation.id)?.messages).toEqual([]);
+  });
+
+  it("trims oldest messages beyond maxConversationMessages", async () => {
+    const store = new InMemoryConversationStore();
+    const provider = new MockProvider();
+    const service = new ConversationService(store, provider, { maxConversationMessages: 6 });
+    const conversation = service.create();
+    for (let i = 0; i < 25; i++) {
+      await service.turn(conversation.id, `m${i}`);
+    }
+    const retained = store.get(conversation.id)?.messages ?? [];
+    expect(retained).toHaveLength(6); // 2 * 3 turns retained of 25
+    expect(retained[0]?.content).toBe("m22");
+    expect(retained.at(-1)?.content).toBe('[mock] You said: "m24"');
   });
 });

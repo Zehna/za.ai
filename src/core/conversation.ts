@@ -40,6 +40,8 @@ export class ConversationNotFoundError extends Error {
 export interface ConversationServiceOptions {
   /** Maximum number of history messages sent to the provider per request. */
   maxHistoryMessages?: number;
+  /** Maximum number of messages retained per conversation (oldest are dropped). */
+  maxConversationMessages?: number;
   /** Prepended as a system message on every provider call when set. */
   systemPrompt?: string;
 }
@@ -52,11 +54,16 @@ export interface TurnResult {
 /**
  * Owns conversations: creation, history, and generating assistant replies
  * through a ChatProvider. The provider stays stateless — we manage history.
+ *
+ * Commit semantics: a turn is atomic. The user message and the reply become
+ * visible/persisted together, only after the provider succeeded. A failed or
+ * aborted turn leaves no trace, so clients can retry the same message safely.
  */
 export class ConversationService {
   readonly #store: ConversationStore;
   readonly #provider: ChatProvider;
   readonly #maxHistoryMessages: number;
+  readonly #maxConversationMessages: number;
   readonly #systemPrompt: string | undefined;
 
   constructor(
@@ -67,6 +74,7 @@ export class ConversationService {
     this.#store = store;
     this.#provider = provider;
     this.#maxHistoryMessages = options.maxHistoryMessages ?? 20;
+    this.#maxConversationMessages = Math.max(options.maxConversationMessages ?? 200, 2);
     this.#systemPrompt = options.systemPrompt;
   }
 
@@ -109,36 +117,44 @@ export class ConversationService {
 
   /**
    * Appends a user message, requests a completion, appends the assistant
-   * reply, and persists both. Returns the reply alongside the conversation.
+   * reply, and persists both atomically on success.
    */
-  async turn(conversationId: string, userContent: string): Promise<TurnResult> {
+  async turn(
+    conversationId: string,
+    userContent: string,
+    signal?: AbortSignal,
+  ): Promise<TurnResult> {
+    signal?.throwIfAborted();
     const conversation = this.get(conversationId);
-    const userMessage: Message = { role: "user", content: userContent };
-    conversation.messages.push(userMessage);
-    conversation.updatedAt = new Date().toISOString();
 
-    const request: ChatRequest = {
-      messages: this.#messagesForProvider(conversation),
-    };
-    const response = await this.#provider.complete(request);
-    conversation.messages.push(response.message);
-    conversation.updatedAt = new Date().toISOString();
-    this.#store.save(conversation);
+    const history: Message[] = [...conversation.messages, { role: "user", content: userContent }];
+    const response = await this.#provider.complete({
+      messages: this.#messagesForProvider(history),
+      signal,
+    });
+
+    history.push(response.message);
+    this.#commit(conversation, history);
     return { conversation, reply: response.message };
   }
 
   /**
-   * Streaming variant of {@link turn}: yields assistant deltas as they arrive
-   * and persists the full reply once the stream completes.
+   * Streaming variant of {@link turn}: yields assistant deltas as they arrive.
+   * Persistence happens once the stream completed successfully; aborted or
+   * failed streams persist nothing.
    */
-  async *streamTurn(conversationId: string, userContent: string): AsyncIterable<string> {
+  async *streamTurn(
+    conversationId: string,
+    userContent: string,
+    signal?: AbortSignal,
+  ): AsyncIterable<string> {
+    signal?.throwIfAborted();
     const conversation = this.get(conversationId);
-    const userMessage: Message = { role: "user", content: userContent };
-    conversation.messages.push(userMessage);
-    conversation.updatedAt = new Date().toISOString();
 
+    const history: Message[] = [...conversation.messages, { role: "user", content: userContent }];
     const request: ChatRequest = {
-      messages: this.#messagesForProvider(conversation),
+      messages: this.#messagesForProvider(history),
+      signal,
     };
 
     let reply = "";
@@ -148,18 +164,27 @@ export class ConversationService {
     }
 
     if (reply.length > 0) {
-      conversation.messages.push({ role: "assistant", content: reply });
-      conversation.updatedAt = new Date().toISOString();
-      this.#store.save(conversation);
+      history.push({ role: "assistant", content: reply });
     }
+    this.#commit(conversation, history);
+  }
+
+  /** Applies retention limits, stamps the update time, and persists. */
+  #commit(conversation: Conversation, history: Message[]): void {
+    conversation.messages =
+      history.length > this.#maxConversationMessages
+        ? history.slice(-this.#maxConversationMessages)
+        : history;
+    conversation.updatedAt = new Date().toISOString();
+    this.#store.save(conversation);
   }
 
   /** History sent to the provider: optional system prompt + last N messages. */
-  #messagesForProvider(conversation: Conversation): Message[] {
-    const history = conversation.messages.slice(-this.#maxHistoryMessages);
+  #messagesForProvider(history: Message[]): Message[] {
+    const trimmed = history.slice(-this.#maxHistoryMessages);
     if (this.#systemPrompt === undefined) {
-      return history;
+      return trimmed;
     }
-    return [{ role: "system", content: this.#systemPrompt }, ...history];
+    return [{ role: "system", content: this.#systemPrompt }, ...trimmed];
   }
 }

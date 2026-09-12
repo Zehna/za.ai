@@ -4,7 +4,7 @@ export interface ChatRequest {
   /** Full message history to send to the model (including system prompt if any). */
   messages: Message[];
   /** Optional abort signal propagated to the underlying transport. */
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
 }
 
 export interface ChatResponse {
