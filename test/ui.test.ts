@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+/// <reference lib="dom.iterable" />
 // @vitest-environment jsdom
 /*
  * UI contract tests: these execute the real public/app.js inside jsdom with a
@@ -17,40 +19,49 @@ const PAGE_HTML = readFileSync(path.join(currentDir, "../public/index.html"), "u
   .replace(/<link[^>]*>/g, "")
   .replace(/<script[^>]*><\/script>/g, "");
 
-function sseFrame(event, data) {
+interface StreamController {
+  enqueue: (chunk: string) => void;
+  close: () => void;
+  abort: () => void;
+}
+
+type FetchMock = ReturnType<typeof vi.fn> & {
+  controllerRef: { current: StreamController | null };
+};
+
+function sseFrame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
 /** Builds a fetch mock returning a streaming SSE response driven by `enqueue`. */
-function sseFetchMock({ onAborted } = {}) {
-  const controllerRef = { current: null };
-  const fetchMock = vi.fn((_url, init) => {
-    const stream = new ReadableStream({
-      start(c) {
-        controllerRef.current = {
-          enqueue: (chunk) => c.enqueue(new TextEncoder().encode(chunk)),
-          close: () => c.close(),
-          abort: () => c.error(new DOMException("Aborted", "AbortError")),
-        };
-      },
-    });
-    init?.signal?.addEventListener("abort", () => {
-      onAborted?.();
-      controllerRef.current?.abort();
-    });
-    return Promise.resolve(
-      new Response(stream, {
+function sseFetchMock({ onAborted }: { onAborted?: () => void } = {}): FetchMock {
+  const controllerRef: { current: StreamController | null } = { current: null };
+  const fetchMock = vi.fn(
+    async (_url: unknown, init?: { signal?: AbortSignal }): Promise<Response> => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          controllerRef.current = {
+            enqueue: (chunk: string) => c.enqueue(new TextEncoder().encode(chunk)),
+            close: () => c.close(),
+            abort: () => c.error(new DOMException("Aborted", "AbortError")),
+          };
+        },
+      });
+      init?.signal?.addEventListener("abort", () => {
+        onAborted?.();
+        controllerRef.current?.abort();
+      });
+      return new Response(stream, {
         status: 200,
         headers: { "content-type": "text/event-stream" },
-      }),
-    );
-  });
-  fetchMock.controllerRef = controllerRef;
-  return fetchMock;
+      });
+    },
+  );
+  return Object.assign(fetchMock, { controllerRef });
 }
 
-function diagnosticsFetchMock() {
-  return vi.fn(async (url) => {
+function diagnosticsFetchMock(): FetchMock {
+  return vi.fn(async (url: unknown) => {
     if (String(url).includes("/api/diagnostics")) {
       return new Response(
         JSON.stringify({
@@ -64,19 +75,19 @@ function diagnosticsFetchMock() {
       );
     }
     return new Response("not found", { status: 404 });
-  });
+  }) as FetchMock;
 }
 
-async function bootPage(fetchOverride) {
+async function bootPage(fetchOverride?: unknown) {
   document.body.innerHTML = "";
   document.documentElement.innerHTML = PAGE_HTML.replace(/<\/?html[^>]*>/g, "")
     .replace(/<\/?head[^>]*>/g, "")
     .replace(/<\/?body[^>]*>/g, "");
-  window.fetch = fetchOverride ?? diagnosticsFetchMock();
-  window.TextDecoder = TextDecoder;
-  window.ReadableStream = ReadableStream;
-  window.Response = Response;
-  window.DOMException = DOMException;
+  window.fetch = (fetchOverride ?? diagnosticsFetchMock()) as typeof fetch;
+  window.TextDecoder = TextDecoder as unknown as typeof window.TextDecoder;
+  window.ReadableStream = ReadableStream as unknown as typeof window.ReadableStream;
+  window.Response = Response as unknown as typeof window.Response;
+  window.DOMException = DOMException as unknown as typeof window.DOMException;
 
   // Execute the real UI script against the DOM.
   // eslint-disable-next-line no-new-func
@@ -85,15 +96,15 @@ async function bootPage(fetchOverride) {
   // Let the diagnostics promise resolve.
   await new Promise((resolve) => setTimeout(resolve, 0));
   return {
-    messages: document.getElementById("messages"),
-    input: document.getElementById("input"),
-    sendBtn: document.getElementById("send"),
-    newChatBtn: document.getElementById("new-chat"),
-    badge: document.getElementById("model-badge"),
+    messages: document.getElementById("messages")!,
+    input: document.getElementById("input") as HTMLTextAreaElement,
+    sendBtn: document.getElementById("send") as HTMLButtonElement,
+    newChatBtn: document.getElementById("new-chat") as HTMLButtonElement,
+    badge: document.getElementById("model-badge")!,
   };
 }
 
-async function tick(times = 6) {
+async function tick(times = 6): Promise<void> {
   for (let i = 0; i < times; i++) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -128,7 +139,7 @@ describe("chat UI (app.js in jsdom)", () => {
     input.value = "ping";
     sendBtn.disabled = false;
     sendBtn.click();
-    const controller = fetchMock.controllerRef.current;
+    const controller = fetchMock.controllerRef.current!;
 
     await tick(2);
     controller.enqueue(sseFrame("meta", { conversationId: "conv-1" }));
@@ -142,7 +153,7 @@ describe("chat UI (app.js in jsdom)", () => {
 
     const bubbles = [...messages.querySelectorAll(".message")];
     expect(bubbles.map((b) => b.className)).toEqual(["message user", "message assistant"]);
-    expect(bubbles[1].textContent).toBe("pong!");
+    expect(bubbles[1]?.textContent).toBe("pong!");
     expect(window.localStorage.getItem("za.ai.conversationId")).toBe("conv-1");
     expect(sendBtn.textContent).toBe("Send");
   });
@@ -156,7 +167,7 @@ describe("chat UI (app.js in jsdom)", () => {
     sendBtn.disabled = false;
     sendBtn.click();
     await tick(2);
-    const controller = fetchMock.controllerRef.current;
+    const controller = fetchMock.controllerRef.current!;
     controller.enqueue(sseFrame("meta", { conversationId: "conv-2" }));
     controller.enqueue(sseFrame("delta", { text: "once " }));
     await tick(2);
@@ -183,7 +194,7 @@ describe("chat UI (app.js in jsdom)", () => {
     sendBtn.disabled = false;
     sendBtn.click();
     await tick(2);
-    let controller = fetchMock.controllerRef.current;
+    let controller = fetchMock.controllerRef.current!;
     controller.enqueue(sseFrame("meta", { conversationId: "conv-3" }));
     controller.enqueue(sseFrame("error", { message: "upstream exploded" }));
     controller.close();
@@ -191,13 +202,13 @@ describe("chat UI (app.js in jsdom)", () => {
 
     const errorBubble = messages.querySelector(".error");
     expect(errorBubble?.textContent).toContain("Provider error: upstream exploded");
-    const retryBtn = errorBubble?.querySelector(".retry");
+    const retryBtn = errorBubble?.querySelector(".retry") as HTMLElement | null;
     expect(retryBtn).toBeTruthy();
 
     // The next fetch call (from Retry) gets a fresh stream controller.
-    retryBtn.click();
+    retryBtn!.click();
     await tick(2);
-    controller = fetchMock.controllerRef.current;
+    controller = fetchMock.controllerRef.current!;
     controller.enqueue(sseFrame("meta", { conversationId: "conv-3" }));
     controller.enqueue(sseFrame("delta", { text: "recovered" }));
     controller.close();
@@ -208,7 +219,7 @@ describe("chat UI (app.js in jsdom)", () => {
   });
 
   it("reflects HTTP errors (e.g. invalid input) as retriable errors", async () => {
-    const fetchMock = vi.fn(async (url) => {
+    const fetchMock = vi.fn(async (url: unknown) => {
       if (String(url).includes("/api/chat/stream")) {
         return new Response(
           JSON.stringify({ error: { code: "invalid_request", message: "message: too long" } }),
@@ -256,6 +267,7 @@ describe("chat UI (app.js in jsdom)", () => {
       removeItem: () => {
         throw new Error("SecurityError");
       },
+      clear: () => {},
     };
     const original = Object.getOwnPropertyDescriptor(window, "localStorage");
     Object.defineProperty(window, "localStorage", { value: failingStorage, configurable: true });
@@ -267,7 +279,7 @@ describe("chat UI (app.js in jsdom)", () => {
     sendBtn.disabled = false;
     sendBtn.click();
     await tick(2);
-    const controller = fetchMock.controllerRef.current;
+    const controller = fetchMock.controllerRef.current!;
     controller.enqueue(sseFrame("meta", { conversationId: "conv-9" }));
     controller.enqueue(sseFrame("delta", { text: "ok" }));
     controller.close();
