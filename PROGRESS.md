@@ -166,7 +166,7 @@ inspected before any change.
 - [x] Docs: README (providers, key safety, smoke test, limits, troubleshooting),
       .env.example (all variables), this file
 
-Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (86 passed) ✅ · build ✅ ·
+Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (83 passed) ✅ · build ✅ ·
 HTTP smoke ✅ · Docker run ✅ · smoke:provider (3 modes) ✅
 
 ## Status summary
