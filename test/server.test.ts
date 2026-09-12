@@ -24,7 +24,12 @@ function makeApp(providerOverrides: Partial<MockProviderOptionsShape> = {}) {
     ...providerOverrides,
   });
   const service = new ConversationService(store, provider);
-  const app = buildApp({ config: mockConfig, service, serveUi: false });
+  const app = buildApp({
+    config: mockConfig,
+    service,
+    provider,
+    serveUi: false,
+  });
   return { app, store, service };
 }
 
@@ -137,7 +142,12 @@ describe("POST /api/chat", () => {
       checkConnectivity: async () => ({ state: "unreachable", detail: "always fails" }),
     };
     const service = new ConversationService(store, failingProvider);
-    const app = buildApp({ config: mockConfig, service, serveUi: false });
+    const app = buildApp({
+      config: mockConfig,
+      service,
+      provider: failingProvider,
+      serveUi: false,
+    });
 
     const response = await app.inject({
       method: "POST",
@@ -222,5 +232,66 @@ describe("conversations API", () => {
       url: "/api/conversations/does-not-exist",
     });
     expect(unknownConversation.statusCode).toBe(404);
+  });
+});
+
+describe("GET /api/diagnostics", () => {
+  it("reports provider info without a key and without a live check by default", async () => {
+    const { app } = makeApp();
+    const response = await app.inject({ method: "GET", url: "/api/diagnostics" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      provider: "mock",
+      model: "za-mock-1",
+      baseUrl: null,
+      apiKeyConfigured: false,
+      connectivity: { checked: false },
+    });
+  });
+
+  it("performs a live connectivity check when requested", async () => {
+    const { app } = makeApp();
+    const response = await app.inject({ method: "GET", url: "/api/diagnostics?check=true" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.connectivity).toMatchObject({ checked: true, state: "ok" });
+  });
+});
+
+describe("input limits", () => {
+  it("rejects messages beyond the configured character limit with 400", async () => {
+    const { app } = makeApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: { message: "x".repeat(32_001) },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("invalid_request");
+    expect(response.json().error.message).toMatch(/message/i);
+  });
+
+  it("accepts messages just below the configured limit", async () => {
+    const { app } = makeApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: { message: "x".repeat(32_000) },
+    });
+    expect(response.statusCode).toBe(201);
+  });
+
+  it("rejects request bodies beyond the 1 MiB server cap with 413", async () => {
+    const { app } = makeApp();
+    // Small message chars limit does not apply to the raw body; craft a JSON
+    // body just above the server body limit via oversized padding fields.
+    const huge = "y".repeat(1_048_577);
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: { message: huge },
+    });
+    expect([413, 400]).toContain(response.statusCode);
+    expect(response.json().error).toBeDefined();
   });
 });

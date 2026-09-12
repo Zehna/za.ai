@@ -4,14 +4,19 @@ import { z } from "zod";
 import type { ConversationService } from "../../core/conversation.js";
 import { ValidationError } from "../errors.js";
 
-const chatRequestSchema = z.object({
-  /** Existing conversation to continue; omitted starts a new one. */
-  conversationId: z.string().uuid().optional(),
-  message: z.string().trim().min(1).max(32_000),
-});
+export function makeChatRequestSchema(maxMessageChars: number) {
+  return z.object({
+    /** Existing conversation to continue; omitted starts a new one. */
+    conversationId: z.string().uuid().optional(),
+    message: z.string().trim().min(1).max(maxMessageChars),
+  });
+}
 
-export function parseChatRequest(body: unknown): z.infer<typeof chatRequestSchema> {
-  const result = chatRequestSchema.safeParse(body);
+export function parseChatRequest(
+  body: unknown,
+  maxMessageChars: number,
+): z.infer<ReturnType<typeof makeChatRequestSchema>> {
+  const result = makeChatRequestSchema(maxMessageChars).safeParse(body);
   if (!result.success) {
     const issues = result.error.issues
       .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
@@ -25,10 +30,14 @@ function sseEvent(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-export function registerChatRoutes(app: FastifyInstance, service: ConversationService): void {
+export function registerChatRoutes(
+  app: FastifyInstance,
+  service: ConversationService,
+  options: { maxMessageChars: number },
+): void {
   /** Send a message and wait for the full reply. */
   app.post("/api/chat", async (request, reply) => {
-    const body = parseChatRequest(request.body);
+    const body = parseChatRequest(request.body, options.maxMessageChars);
     const conversation = body.conversationId
       ? service.get(body.conversationId)
       : service.create(titleFrom(body.message));
@@ -41,18 +50,28 @@ export function registerChatRoutes(app: FastifyInstance, service: ConversationSe
 
   /** Send a message and receive the reply as server-sent events. */
   app.post("/api/chat/stream", async (request, reply) => {
-    const body = parseChatRequest(request.body);
+    const body = parseChatRequest(request.body, options.maxMessageChars);
     const conversation = body.conversationId
       ? service.get(body.conversationId)
       : service.create(titleFrom(body.message));
     const conversationId = conversation.id;
-    const turns = service.streamTurn(conversationId, body.message);
+
+    // Abort the upstream request when the client disconnects mid-stream.
+    const clientGone = new AbortController();
+    request.raw.on("close", () => {
+      if (!reply.raw.writableEnded) {
+        clientGone.abort();
+      }
+    });
+
+    const turns = service.streamTurn(conversationId, body.message, clientGone.signal);
 
     const events = Readable.from(
       (async function* generateSse() {
         yield sseEvent("meta", { conversationId });
         try {
           for await (const delta of turns) {
+            if (clientGone.signal.aborted) return;
             yield sseEvent("delta", { text: delta });
           }
           yield sseEvent("done", { conversationId });
