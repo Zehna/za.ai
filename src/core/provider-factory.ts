@@ -13,6 +13,7 @@ export function createProvider(config: AppConfig): ChatProvider {
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         model: config.model,
+        timeoutMs: config.providerTimeoutMs,
       });
   }
 }

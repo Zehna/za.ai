@@ -12,6 +12,9 @@ const mockConfig: AppConfig = {
   host: "127.0.0.1",
   port: 0,
   maxHistoryMessages: 20,
+  maxMessageChars: 32_000,
+  maxConversationMessages: 200,
+  providerTimeoutMs: 60_000,
 };
 
 function makeApp(providerOverrides: Partial<MockProviderOptionsShape> = {}) {
@@ -131,6 +134,7 @@ describe("POST /api/chat", () => {
       async *stream(): AsyncIterable<string> {
         throw new ProviderError("upstream exploded", 503);
       },
+      checkConnectivity: async () => ({ state: "unreachable", detail: "always fails" }),
     };
     const service = new ConversationService(store, failingProvider);
     const app = buildApp({ config: mockConfig, service, serveUi: false });

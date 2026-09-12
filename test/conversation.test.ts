@@ -76,6 +76,9 @@ describe("ConversationService", () => {
       async *stream() {
         throw new Error("not used");
       },
+      async checkConnectivity() {
+        return { state: "ok" as const };
+      },
     };
     const service = new ConversationService(store, fakeProvider, {
       maxHistoryMessages: 4,

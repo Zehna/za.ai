@@ -4,14 +4,17 @@ import { MockProvider } from "../src/core/providers/mock.js";
 import { OpenAICompatProvider } from "../src/core/providers/openai-compat.js";
 
 describe("createProvider", () => {
+  const base = {
+    host: "0.0.0.0",
+    port: 3000,
+    maxHistoryMessages: 20,
+    maxMessageChars: 32_000,
+    maxConversationMessages: 200,
+    providerTimeoutMs: 60_000,
+  };
+
   it("creates a MockProvider for the mock config", () => {
-    const provider = createProvider({
-      provider: "mock",
-      model: "za-mock-1",
-      host: "0.0.0.0",
-      port: 3000,
-      maxHistoryMessages: 20,
-    });
+    const provider = createProvider({ provider: "mock", model: "za-mock-1", ...base });
     expect(provider).toBeInstanceOf(MockProvider);
     expect(provider.model).toBe("za-mock-1");
   });
@@ -20,9 +23,7 @@ describe("createProvider", () => {
     const provider = createProvider({
       provider: "openai-compat",
       model: "llama-3",
-      host: "0.0.0.0",
-      port: 3000,
-      maxHistoryMessages: 20,
+      ...base,
       apiKey: "test-key",
       baseUrl: "http://localhost:11434/v1",
     });

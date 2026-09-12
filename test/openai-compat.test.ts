@@ -96,10 +96,10 @@ describe("OpenAICompatProvider.stream", () => {
   it("yields content deltas and stops at [DONE]", async () => {
     const fetchImpl = stubFetch(
       sseResponse([
-        'data: {"choices":[{"delta":{"content":"Hel"}}]}\n',
+        'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
-        'data: {"choices":[{"delta":{}}]}\n',
-        "data: [DONE]\n",
+        'data: {"choices":[{"delta":{}}]}\n\n',
+        "data: [DONE]\n\n",
         'data: {"choices":[{"delta":{"content":"IGNORED"}}]}\n',
       ]),
     );
@@ -141,5 +141,214 @@ describe("OpenAICompatProvider.stream", () => {
         // consume
       }
     }).rejects.toMatchObject({ name: "ProviderError" });
+  });
+});
+
+describe("OpenAICompatProvider robustness", () => {
+  function makeProvider(apiKey: string, response: Response, timeoutMs = 60_000) {
+    const fetchImpl = stubFetch(response);
+    return {
+      fetchImpl,
+      provider: new OpenAICompatProvider({
+        apiKey,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        timeoutMs,
+      }),
+    };
+  }
+
+  it("rejects malformed JSON bodies in complete() with a ProviderError", async () => {
+    const fetchImpl = stubFetch(
+      new Response("<html>not json</html>", { headers: { "content-type": "application/json" } }),
+    );
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(provider.complete({ messages: [] })).rejects.toThrow(/malformed JSON/i);
+  });
+
+  it("rejects unexpected content types in complete()", async () => {
+    const fetchImpl = stubFetch(
+      new Response("<html>proxy error</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(provider.complete({ messages: [] })).rejects.toThrow(
+      /unexpected provider content/i,
+    );
+  });
+
+  it("rejects unexpected content types in stream()", async () => {
+    const fetchImpl = stubFetch(jsonResponse({ choices: [] }));
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(async () => {
+      for await (const _ of provider.stream({ messages: [] })) {
+        // consume
+      }
+    }).rejects.toThrow(/unexpected provider content/i);
+  });
+
+  it("ignores SSE comments and blank lines", async () => {
+    const fetchImpl = stubFetch(
+      sseResponse([
+        ": keep-alive comment\n",
+        "\n",
+        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n',
+        ": another comment\n",
+        "\n",
+        "data: [DONE]\n\n",
+      ]),
+    );
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const deltas: string[] = [];
+    for await (const delta of provider.stream({ messages: [] })) {
+      deltas.push(delta);
+    }
+    expect(deltas).toEqual(["Hi"]);
+  });
+
+  it("joins multi-line data payloads per the SSE spec", async () => {
+    const fetchImpl = stubFetch(
+      sseResponse([
+        'data: {"choices":[{"delta":\n',
+        'data: {"content":"split"}}]}\n\n',
+        "data: [DONE]\n",
+      ]),
+    );
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const deltas: string[] = [];
+    for await (const delta of provider.stream({ messages: [] })) {
+      deltas.push(delta);
+    }
+    expect(deltas).toEqual(["split"]);
+  });
+
+  it("tolerates events with missing choices/delta fields", async () => {
+    const fetchImpl = stubFetch(
+      sseResponse([
+        "data: {}\n\n",
+        'data: {"choices":[]}\n\n',
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+        'data: {"choices":[{"finish_reason":"stop"}]}\n\n',
+        "data: [DONE]\n",
+      ]),
+    );
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const deltas: string[] = [];
+    for await (const delta of provider.stream({ messages: [] })) {
+      deltas.push(delta);
+    }
+    expect(deltas).toEqual(["ok"]);
+  });
+
+  it("includes upstream error bodies in the error message", async () => {
+    const { provider } = makeProvider(
+      "secret",
+      new Response("upstream quota exceeded", { status: 429 }),
+    );
+    await expect(provider.complete({ messages: [] })).rejects.toThrow(
+      /Provider returned 429: upstream quota exceeded/,
+    );
+  });
+
+  it("aborts a non-streaming request when the external signal fires", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(
+      (_url: unknown, init: { signal: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(new Error("AbortError")));
+        }),
+    );
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const pending = provider.complete({ messages: [], signal: controller.signal });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ status: 499 });
+  });
+
+  it("reports a timeout when the provider does not answer in time", async () => {
+    const fetchImpl = vi.fn(
+      (_url: unknown, init: { signal: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(new Error("AbortError")));
+        }),
+    );
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      timeoutMs: 20,
+    });
+    await expect(provider.complete({ messages: [] })).rejects.toThrow(/timed out after 20ms/);
+  });
+
+  it("never leaks the API key through upstream error bodies", async () => {
+    const apiKey = "sk-abcdef1234567890abcdef1234567890";
+    const { provider } = makeProvider(
+      apiKey,
+      new Response(`bad key: ${apiKey} (Bearer ${apiKey})`, { status: 401 }),
+    );
+    const error = await provider.complete({ messages: [] }).catch((e: ProviderError) => e);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.message).not.toContain(apiKey);
+    expect(error.message).toContain("[REDACTED]");
+  });
+});
+
+describe("OpenAICompatProvider.checkConnectivity", () => {
+  it("reports ok with latency on success", async () => {
+    const fetchImpl = stubFetch(jsonResponse({ data: [] }));
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await provider.checkConnectivity();
+    expect(result.state).toBe("ok");
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports authentication problems without leaking the key", async () => {
+    const apiKey = "sk-abcdef1234567890abcdef1234567890";
+    const fetchImpl = stubFetch(new Response("invalid key", { status: 401 }));
+    const provider = new OpenAICompatProvider({
+      apiKey,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await provider.checkConnectivity();
+    expect(result.state).toBe("unreachable");
+    expect(result.detail).toMatch(/authentication/i);
+    expect(result.detail).not.toContain(apiKey);
+  });
+
+  it("reports unreachable on network failure", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    });
+    const provider = new OpenAICompatProvider({
+      apiKey: "secret",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const result = await provider.checkConnectivity();
+    expect(result.state).toBe("unreachable");
+    expect(result.detail).toMatch(/ECONNREFUSED/);
   });
 });

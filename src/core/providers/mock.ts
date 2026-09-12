@@ -1,4 +1,4 @@
-import type { ChatRequest, ChatProvider, ChatResponse } from "../provider.js";
+import type { ChatRequest, ChatProvider, ChatResponse, ConnectivityResult } from "../provider.js";
 import type { Message } from "../types.js";
 
 export interface MockProviderOptions {
@@ -44,6 +44,10 @@ export class MockProvider implements ChatProvider {
       }
       yield chunk;
     }
+  }
+
+  async checkConnectivity(): Promise<ConnectivityResult> {
+    return { state: "ok", detail: "mock provider — no network involved" };
   }
 
   #replyFor(messages: Message[]): string {
