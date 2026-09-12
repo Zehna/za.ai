@@ -1,9 +1,37 @@
-import { appInfo } from "./app-info.js";
+import { buildApp } from "./server/app.js";
+import { loadConfig, ConfigError } from "./core/config.js";
+import { ConversationService, InMemoryConversationStore } from "./core/conversation.js";
+import { createProvider } from "./core/provider-factory.js";
 
-export function main() {
-  // Milestone 3 replaces this stub with the Fastify HTTP server.
-  const info = appInfo();
-  console.log(`${info.name} ${info.version} — ${info.description}`);
+async function main(): Promise<void> {
+  let config;
+  try {
+    config = loadConfig();
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      console.error(`Configuration error: ${error.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+
+  const provider = createProvider(config);
+  const store = new InMemoryConversationStore();
+  const service = new ConversationService(store, provider, {
+    maxHistoryMessages: config.maxHistoryMessages,
+    ...(config.systemPrompt !== undefined ? { systemPrompt: config.systemPrompt } : {}),
+  });
+
+  const app = buildApp({ config, service, serveUi: true });
+
+  await app.listen({ port: config.port, host: config.host });
+  console.log(
+    `${config.provider}/${config.model} listening on http://${config.host}:${config.port}`,
+  );
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

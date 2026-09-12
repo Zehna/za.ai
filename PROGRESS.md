@@ -1,6 +1,6 @@
 # za.ai — Progress & Implementation Plan
 
-## Status: In Progress — Milestones 0-2 complete
+## Status: In Progress — Milestones 0-3 complete
 
 Last updated: 2026-09-12
 
@@ -69,16 +69,6 @@ Key decisions:
 
 Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (2 passed) ✅ · build ✅ · smoke run ✅
 
-### Milestone 2 — Core domain
-
-- [ ] `ChatProvider` interface (`complete` + streaming) and provider factory
-- [ ] `MockProvider` (deterministic, echoes/scripted replies)
-- [ ] `OpenAICompatProvider` (uses `fetch`, configurable `baseURL`/`model`/`apiKey`)
-- [ ] `ConversationService`: create conversation, append messages, generate reply,
-      history trimming to a max context
-- [ ] Env-driven config with validation (provider, model, base URL, port, …)
-- [ ] Unit tests for all of the above
-
 ### Milestone 2 — Core domain ✅
 
 - [x] `ChatProvider` interface (`complete` + streaming) and provider factory
@@ -93,13 +83,17 @@ Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (2 passed) ✅ �
 
 Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (27 passed) ✅ · build ✅
 
-### Milestone 3 — HTTP API
+### Milestone 3 — HTTP API ✅
 
-- [ ] `POST /api/chat` (JSON reply) and `POST /api/chat/stream` (SSE)
-- [ ] `GET /api/conversations/:id`, `GET /api/conversations`
-- [ ] `GET /healthz`
-- [ ] Zod request validation + central error handling
-- [ ] Integration tests via `fastify.inject()`
+- [x] `POST /api/chat` (JSON reply) and `POST /api/chat/stream` (SSE: meta/delta/done/error events)
+- [x] `GET /api/conversations`, `GET /api/conversations/:id`, `DELETE /api/conversations/:id`
+- [x] `GET /healthz` (status, provider, model, uptime)
+- [x] Zod request validation + central error handler mapping domain errors to
+      400/404/502 with `{ error: { code, message } }` bodies
+- [x] Integration tests via `fastify.inject()` (10 tests incl. SSE parsing)
+- [x] Real-HTTP smoke test: healthz, chat, SSE verified against the built server
+
+Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (37 passed) ✅ · build ✅ · HTTP smoke ✅
 
 ### Milestone 4 — Web UI
 
