@@ -62,6 +62,11 @@ h1 span {
   padding: 0.25rem 0.75rem;
 }
 
+#model-badge.badge-down {
+  color: #ff9c9c;
+  border-color: rgba(220, 70, 70, 0.5);
+}
+
 #new-chat {
   background: none;
   color: var(--accent);
@@ -121,6 +126,32 @@ main {
   border: 1px solid rgba(220, 70, 70, 0.5);
   color: #ff9c9c;
   font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.message.error .retry {
+  background: none;
+  border: 1px solid #ff9c9c;
+  color: #ff9c9c;
+  border-radius: 6px;
+  padding: 0.15rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.message.error .retry:hover {
+  background: rgba(220, 70, 70, 0.2);
+}
+
+.message.marker {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+  background: none;
+  border: none;
+  padding: 0;
 }
 
 .message .cursor {
@@ -134,6 +165,10 @@ main {
   50% {
     opacity: 0;
   }
+}
+
+#send.stop {
+  background: #d24b4b;
 }
 
 #composer {

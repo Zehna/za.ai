@@ -4,6 +4,32 @@
 
   const STORAGE_KEY = "za.ai.conversationId";
 
+  // --- resilient storage (private mode / disabled localStorage) ------------
+  const memory = new Map();
+  const storage = {
+    getItem(key) {
+      try {
+        return window.localStorage.getItem(key);
+      } catch {
+        return memory.has(key) ? memory.get(key) : null;
+      }
+    },
+    setItem(key, value) {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch {
+        memory.set(key, value);
+      }
+    },
+    removeItem(key) {
+      try {
+        window.localStorage.removeItem(key);
+      } catch {
+        memory.delete(key);
+      }
+    },
+  };
+
   const messagesEl = document.getElementById("messages");
   const emptyStateEl = document.getElementById("empty-state");
   const inputEl = document.getElementById("input");
@@ -12,17 +38,23 @@
   const modelBadge = document.getElementById("model-badge");
 
   /** @type {string | null} */
-  let conversationId = localStorage.getItem(STORAGE_KEY);
+  let conversationId = storage.getItem(STORAGE_KEY);
   /** @type {boolean} */
   let busy = false;
+  /** @type {AbortController | null} */
+  let controller = null;
+  /** @type {string | null} last user message, kept for Retry */
+  let lastMessage = null;
 
   function setBusy(value) {
     busy = value;
-    sendBtn.disabled = value || inputEl.value.trim().length === 0;
+    sendBtn.textContent = value ? "Stop" : "Send";
+    sendBtn.disabled = value ? false : inputEl.value.trim().length === 0;
+    sendBtn.classList.toggle("stop", value);
   }
 
   function hideEmptyState() {
-    if (emptyStateEl) emptyStateEl.remove();
+    if (emptyStateEl && emptyStateEl.isConnected) emptyStateEl.remove();
   }
 
   function addMessage(role, text) {
@@ -35,27 +67,62 @@
     return el;
   }
 
-  function showError(text) {
-    addMessage("error", text);
+  function addError(text, { retriable = false } = {}) {
+    hideEmptyState();
+    const el = document.createElement("div");
+    el.className = "message error";
+    const label = document.createElement("span");
+    label.textContent = text;
+    el.appendChild(label);
+    if (retriable && lastMessage) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "retry";
+      retry.textContent = "Retry";
+      retry.addEventListener("click", () => {
+        el.remove();
+        send(lastMessage, { isRetry: true });
+      });
+      el.appendChild(retry);
+    }
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
   }
 
-  async function checkHealth() {
+  function addMarker(text) {
+    const el = document.createElement("div");
+    el.className = "message marker";
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  async function loadDiagnostics() {
     try {
-      const response = await fetch("/healthz");
-      if (!response.ok) throw new Error(`health check failed (${response.status})`);
+      const response = await fetch("/api/diagnostics");
+      if (!response.ok) throw new Error(`diagnostics failed (${response.status})`);
       const body = await response.json();
       modelBadge.textContent = `${body.provider} · ${body.model}`;
-      modelBadge.title = `provider: ${body.provider}, model: ${body.model}`;
+      modelBadge.classList.remove("badge-down");
+      modelBadge.title =
+        `provider: ${body.provider}` +
+        (body.baseUrl ? `\nbase url: ${body.baseUrl}` : "") +
+        `\napi key configured: ${body.apiKeyConfigured ? "yes" : "no"}`;
     } catch {
-      modelBadge.textContent = "unreachable";
+      modelBadge.textContent = "status unknown";
+      modelBadge.classList.add("badge-down");
+      modelBadge.title = "could not reach /api/diagnostics";
     }
   }
 
   /**
    * POSTs to the SSE endpoint and parses "event:/data:" frames while streaming.
    * @param {string} message
+   * @param {AbortSignal} signal
    */
-  async function streamChat(message) {
+  async function streamChat(message, signal) {
     const payload = { message };
     if (conversationId) payload.conversationId = conversationId;
 
@@ -63,6 +130,7 @@
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!response.ok || !response.body) {
       let detail = `request failed (${response.status})`;
@@ -88,15 +156,17 @@
       while ((separator = buffer.indexOf("\n\n")) >= 0) {
         const frame = buffer.slice(0, separator);
         buffer = buffer.slice(separator + 2);
-        handleFrame(frame, message);
+        handleFrame(frame);
       }
     }
   }
 
   /** @type {HTMLElement | null} */
   let streamingEl = null;
+  /** @type {Text | null} text node receiving streamed deltas */
+  let streamingText = null;
 
-  function handleFrame(frame, fallbackMessage) {
+  function handleFrame(frame) {
     let event = "message";
     let data = "";
     for (const line of frame.split("\n")) {
@@ -113,43 +183,81 @@
 
     if (event === "meta") {
       conversationId = parsed.conversationId;
-      localStorage.setItem(STORAGE_KEY, conversationId);
+      storage.setItem(STORAGE_KEY, conversationId);
     } else if (event === "delta") {
-      if (!streamingEl) streamingEl = addMessage("assistant", "");
-      streamingEl.textContent += parsed.text;
+      if (!streamingEl || !streamingText) {
+        streamingEl = addMessage("assistant", "");
+        streamingText = document.createTextNode("");
+        streamingEl.appendChild(streamingText);
+      }
+      streamingText.data += parsed.text;
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } else if (event === "error") {
-      showError(`Provider error: ${parsed.message}`);
+      if (streamingEl && streamingText && streamingText.data === "") streamingEl.remove();
+      streamingEl = null;
+      streamingText = null;
+      addError(`Provider error: ${parsed.message}`, { retriable: true });
     }
-    void fallbackMessage;
   }
 
-  async function send() {
-    const message = inputEl.value.trim();
-    if (!message || busy) return;
+  async function send(messageOverride = null, { isRetry = false } = {}) {
+    if (controller) {
+      // The Send button is acting as Stop.
+      controller.abort();
+      return;
+    }
+    if (busy) return;
+    const message = messageOverride ?? inputEl.value.trim();
+    if (!message) return;
+
     setBusy(true);
-    addMessage("user", message);
-    inputEl.value = "";
-    inputEl.style.height = "auto";
-    streamingEl = null;
+    if (!isRetry) {
+      addMessage("user", message);
+      inputEl.value = "";
+      inputEl.style.height = "auto";
+    }
+    lastMessage = message;
+    streamingEl = addMessage("assistant", "");
+    streamingText = document.createTextNode("");
+    streamingEl.appendChild(streamingText);
+    const cursor = document.createElement("span");
+    cursor.className = "cursor";
+    cursor.textContent = "▍";
+    streamingEl.appendChild(cursor);
+    controller = new AbortController();
 
     try {
-      await streamChat(message);
+      await streamChat(message, controller.signal);
+      if (streamingEl && streamingText && streamingText.data === "") streamingEl.remove();
     } catch (error) {
-      showError(error instanceof Error ? error.message : "unexpected error");
-    } finally {
-      if (streamingEl && streamingEl.textContent === "") {
-        streamingEl.textContent = "(empty response)";
+      const aborted =
+        error instanceof DOMException
+          ? error.name === "AbortError"
+          : error instanceof Error && error.name === "AbortError";
+      if (aborted) {
+        if (streamingEl && streamingText && streamingText.data === "") streamingEl.remove();
+        addMarker("Generation stopped — the partial reply above was not saved.");
+      } else {
+        if (streamingEl && streamingText && streamingText.data === "") streamingEl.remove();
+        addError(error instanceof Error ? error.message : "unexpected error", {
+          retriable: true,
+        });
       }
+    } finally {
+      streamingEl?.querySelector(".cursor")?.remove();
       streamingEl = null;
+      streamingText = null;
+      controller = null;
       setBusy(false);
       inputEl.focus();
     }
   }
 
   function newChat() {
+    if (controller) controller.abort();
     conversationId = null;
-    localStorage.removeItem(STORAGE_KEY);
+    lastMessage = null;
+    storage.removeItem(STORAGE_KEY);
     messagesEl.innerHTML =
       '<div class="empty-state" id="empty-state"><p>Ask anything to start the conversation.</p></div>';
     inputEl.focus();
@@ -168,18 +276,19 @@
   inputEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      send();
+      if (!busy) send();
     }
   });
 
   inputEl.addEventListener("input", () => {
     inputEl.style.height = "auto";
     inputEl.style.height = `${Math.min(inputEl.scrollHeight, window.innerHeight * 0.4)}px`;
-    sendBtn.disabled = busy || inputEl.value.trim().length === 0;
+    if (!busy) sendBtn.disabled = inputEl.value.trim().length === 0;
   });
 
   newChatBtn.addEventListener("click", newChat);
 
-  checkHealth();
+  setBusy(false);
+  loadDiagnostics();
   inputEl.focus();
 })();
