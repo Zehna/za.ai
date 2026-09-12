@@ -1,8 +1,13 @@
 # za.ai — Progress & Implementation Plan
 
-## Status: In Progress
+## Status: In Progress — Milestone 1 complete
 
 Last updated: 2026-09-12
+
+> **⚠️ Push blocker:** `git push` currently fails because this environment has no
+> GitHub credentials (`GITHUB_TOKEN` unset, `gh` not authenticated, credential helper
+> returns nothing). All work is committed locally on `zai-development`; push once
+> credentials are available (e.g. `gh auth login` or a codespace token with repo scope).
 
 ## What is za.ai?
 
@@ -49,18 +54,23 @@ Key decisions:
 ## Milestones
 
 ### Milestone 0 — Planning ✅
+
 - [x] Inspect repository, confirm branch `zai-development`
 - [x] Write this plan
 
-### Milestone 1 — Project scaffold ⏳
-- [ ] `package.json` with scripts: `dev`, `build`, `start`, `test`, `lint`, `format`, `typecheck`
-- [ ] `tsconfig.json` (strict, ESM, NodeNext)
-- [ ] ESLint flat config + Prettier, `.gitignore`
-- [ ] Vitest wired up with a smoke test
-- [ ] GitHub Actions CI (lint + typecheck + test + build on push/PR to `zai-development`)
-- [ ] README with quickstart
+### Milestone 1 — Project scaffold ✅
+
+- [x] `package.json` with scripts: `dev`, `build`, `start`, `test`, `lint`, `format`, `typecheck`
+- [x] `tsconfig.json` (strict, ESM, NodeNext) + `tsconfig.build.json` for emit builds
+- [x] ESLint flat config + Prettier, `.gitignore`
+- [x] Vitest wired up with a smoke test
+- [x] GitHub Actions CI (lint + format + typecheck + test + build on push/PR)
+- [x] README with quickstart
+
+Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (2 passed) ✅ · build ✅ · smoke run ✅
 
 ### Milestone 2 — Core domain
+
 - [ ] `ChatProvider` interface (`complete` + streaming) and provider factory
 - [ ] `MockProvider` (deterministic, echoes/scripted replies)
 - [ ] `OpenAICompatProvider` (uses `fetch`, configurable `baseURL`/`model`/`apiKey`)
@@ -70,6 +80,7 @@ Key decisions:
 - [ ] Unit tests for all of the above
 
 ### Milestone 3 — HTTP API
+
 - [ ] `POST /api/chat` (JSON reply) and `POST /api/chat/stream` (SSE)
 - [ ] `GET /api/conversations/:id`, `GET /api/conversations`
 - [ ] `GET /healthz`
@@ -77,11 +88,13 @@ Key decisions:
 - [ ] Integration tests via `fastify.inject()`
 
 ### Milestone 4 — Web UI
+
 - [ ] Static chat page (vanilla HTML/JS, no build step) consuming the API
 - [ ] Streaming display via SSE, conversation persistence in `localStorage`
 - [ ] Verified against a running server (mock provider)
 
 ### Milestone 5 — Ops & polish
+
 - [ ] Dockerfile (multi-stage, non-root)
 - [ ] `.env.example` (no secrets), docs for provider configuration
 - [ ] Final full verification: lint + typecheck + test + build + smoke run
