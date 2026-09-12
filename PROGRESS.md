@@ -1,6 +1,6 @@
 # za.ai — Progress & Implementation Plan
 
-## Status: In Progress — Milestones 0-3 complete
+## Status: In Progress — Milestones 0-4 complete
 
 Last updated: 2026-09-12
 
@@ -95,11 +95,19 @@ Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (27 passed) ✅ 
 
 Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (37 passed) ✅ · build ✅ · HTTP smoke ✅
 
-### Milestone 4 — Web UI
+### Milestone 4 — Web UI ✅
 
-- [ ] Static chat page (vanilla HTML/JS, no build step) consuming the API
-- [ ] Streaming display via SSE, conversation persistence in `localStorage`
-- [ ] Verified against a running server (mock provider)
+- [x] Static chat page (`public/` — vanilla HTML/CSS/JS, no build step) consuming the API
+- [x] Streaming display: POST + fetch-stream SSE client (`meta`/`delta`/`done`/`error` frames)
+- [x] Conversation id persisted in `localStorage`, "+ New chat" resets it
+- [x] Enter-to-send, Shift+Enter newline, auto-growing input, send-button state
+- [x] Verified against the running server (mock provider): assets 200, app.js syntax
+      checked, and the exact client SSE logic re-run in Node reassembles replies
+- [ ] ⚠️ Real-browser GUI pass NOT possible in this environment (no browser backend
+      available to the automation tooling) — do a manual `npm start` + open
+      http://localhost:3000 when credentials/browser access exist
+
+Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (37 passed) ✅ · build ✅ · client-contract ✅
 
 ### Milestone 5 — Ops & polish
 

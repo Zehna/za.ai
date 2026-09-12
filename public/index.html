@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>za.ai</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>"
+    />
+  </head>
+  <body>
+    <header>
+      <h1>za<span>.ai</span></h1>
+      <div class="header-meta">
+        <span id="model-badge" title="active provider/model">…</span>
+        <button id="new-chat" type="button" title="Start a new conversation">+ New chat</button>
+      </div>
+    </header>
+
+    <main id="messages" aria-live="polite">
+      <div class="empty-state" id="empty-state">
+        <p>Ask anything to start the conversation.</p>
+      </div>
+    </main>
+
+    <form id="composer">
+      <textarea
+        id="input"
+        rows="1"
+        placeholder="Type a message… (Enter to send, Shift+Enter for a newline)"
+        autofocus
+      ></textarea>
+      <button id="send" type="submit" disabled>Send</button>
+    </form>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
