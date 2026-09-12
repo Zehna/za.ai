@@ -1,6 +1,6 @@
 # za.ai — Progress & Implementation Plan
 
-## Status: In Progress — Milestones 0-4 complete
+## Status: COMPLETE locally — awaiting git push (see blocker above)
 
 Last updated: 2026-09-12
 
@@ -109,11 +109,20 @@ Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (37 passed) ✅ 
 
 Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (37 passed) ✅ · build ✅ · client-contract ✅
 
-### Milestone 5 — Ops & polish
+### Milestone 5 — Ops & polish ✅
 
-- [ ] Dockerfile (multi-stage, non-root)
-- [ ] `.env.example` (no secrets), docs for provider configuration
-- [ ] Final full verification: lint + typecheck + test + build + smoke run
+- [x] Multi-stage `Dockerfile` (node:24-alpine, non-root `node` user, built-in
+      healthcheck hitting /healthz) + `.dockerignore`
+- [x] Docker image built and verified end-to-end (healthz, chat, UI 200, whoami=node)
+- [x] `.env.example` with every supported variable (placeholders only, no secrets)
+- [x] README: HTTP API reference (endpoints, SSE events, error format), Docker usage
+- [x] Final full verification: lint + format + typecheck + 37 tests + build + docker run
+
+## Status summary
+
+All five planned milestones are complete and locally committed on `zai-development`.
+**The only outstanding item is `git push`**, blocked by missing GitHub credentials in
+this environment (see note at the top). Once auth is available: `git push origin zai-development`.
 
 ## Verification checklist (run at every milestone)
 
