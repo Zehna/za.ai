@@ -1,6 +1,6 @@
 # za.ai — Progress & Implementation Plan
 
-## Status: In Progress — Milestone 1 complete
+## Status: In Progress — Milestones 0-2 complete
 
 Last updated: 2026-09-12
 
@@ -78,6 +78,20 @@ Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (2 passed) ✅ �
       history trimming to a max context
 - [ ] Env-driven config with validation (provider, model, base URL, port, …)
 - [ ] Unit tests for all of the above
+
+### Milestone 2 — Core domain ✅
+
+- [x] `ChatProvider` interface (`complete` + streaming) and provider factory
+- [x] `MockProvider` (deterministic, echoes/scripted replies, chunked streaming)
+- [x] `OpenAICompatProvider` (uses `fetch`, configurable `baseURL`/`model`/`apiKey`,
+      SSE delta parsing, `ProviderError` with HTTP status, abort support)
+- [x] `ConversationService`: create/list/get/delete, `turn()` and `streamTurn()`,
+      history trimming to `maxHistoryMessages` + optional system prompt
+- [x] `InMemoryConversationStore` (store interface ready for durable impls)
+- [x] Env-driven config with zod validation, discriminated union per provider
+- [x] Unit tests for all of the above
+
+Verified: lint ✅ · format:check ✅ · typecheck ✅ · test (27 passed) ✅ · build ✅
 
 ### Milestone 3 — HTTP API
 
