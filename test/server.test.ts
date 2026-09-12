@@ -5,6 +5,7 @@ import { MockProvider } from "../src/core/providers/mock.js";
 import { ProviderError } from "../src/core/provider.js";
 import type { AppConfig } from "../src/core/config.js";
 import type { ChatProvider } from "../src/core/provider.js";
+import { createSecretRedactor } from "../src/core/redact.js";
 
 const mockConfig: AppConfig = {
   provider: "mock",
@@ -293,5 +294,84 @@ describe("input limits", () => {
     });
     expect([413, 400]).toContain(response.statusCode);
     expect(response.json().error).toBeDefined();
+  });
+});
+
+describe("security hardening", () => {
+  function redactingApp(apiKey: string) {
+    const store = new InMemoryConversationStore();
+    // A provider whose upstream echoes the Authorization header back in the
+    // error body — the worst-case leak vector for a key.
+    const leakingProvider: ChatProvider = {
+      name: "leaky",
+      model: "leak-1",
+      complete: async () => {
+        throw new ProviderError(`Provider returned 500: bad key Bearer ${apiKey}`, 500);
+      },
+      // eslint-disable-next-line require-yield
+      async *stream(): AsyncIterable<string> {
+        throw new ProviderError(`bad key Bearer ${apiKey}`, 500);
+      },
+      checkConnectivity: async () => ({ state: "unreachable" }),
+    };
+    const service = new ConversationService(store, leakingProvider);
+    const openAiConfig: AppConfig = {
+      ...mockConfig,
+      provider: "openai-compat",
+      model: "leak-1",
+      apiKey,
+      baseUrl: "http://leaky.test/v1",
+    };
+    const redact = createSecretRedactor(apiKey);
+    const app = buildApp({ config: openAiConfig, service, provider: leakingProvider, redact });
+    return app;
+  }
+
+  it("never returns the API key to clients, even when upstream echoes it", async () => {
+    const apiKey = "sk-live-abcdef1234567890abcdef";
+    const app = redactingApp(apiKey);
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: { message: "hi" },
+    });
+    expect(response.statusCode).toBe(502);
+    const text = response.body;
+    expect(text).not.toContain(apiKey);
+    expect(text).toContain("[REDACTED]");
+  });
+
+  it("does not emit CORS headers (same-origin by default)", async () => {
+    const { app } = makeApp();
+    const response = await app.inject({ method: "GET", url: "/healthz" });
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("blocks static file path traversal", async () => {
+    const provider = new MockProvider();
+    const service = new ConversationService(new InMemoryConversationStore(), provider);
+    const uiApp = buildApp({ config: mockConfig, service, provider, serveUi: true });
+    for (const probe of [
+      "/..%2f..%2f..%2fpackage.json",
+      "/%2e%2e/%2e%2e/package.json",
+      "/../../package.json",
+    ]) {
+      const traversal = await uiApp.inject({ method: "GET", url: probe });
+      expect([400, 403, 404]).toContain(traversal.statusCode);
+    }
+  });
+
+  it("returns structured errors for malformed JSON bodies without stack traces", async () => {
+    const { app } = makeApp();
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/chat",
+      payload: "{not json",
+      headers: { "content-type": "application/json" },
+    });
+    expect(response.statusCode).toBe(400);
+    const body = response.json();
+    expect(body.error.code).toBe("invalid_request");
+    expect(JSON.stringify(body)).not.toMatch(/at\s+\(|node_modules|stack/i);
   });
 });
